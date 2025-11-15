@@ -17,9 +17,7 @@
 using Duckov.UI;
 using EscapeFromDuckovCoopMod.Net;  // 引入智能发送扩展方法
 using EscapeFromDuckovCoopMod.Utils;
-using System;
 using System.Collections;
-using System.Collections.Generic;
 
 namespace EscapeFromDuckovCoopMod;
 
@@ -59,10 +57,10 @@ public class SceneNet : MonoBehaviour
 
     // 🆕 缓存完整的投票数据（供 UI 使用，客户端从主机接收，主机从本地构建）
     public SceneVoteMessage.VoteStateData cachedVoteData = null;
-    
+
     // 🆕 过期投票ID（客户端维护，用于过滤已取消的投票）
     public int expiredVoteId = 0;
-    
+
     private readonly Dictionary<string, string> _cliServerPidToLocal = new();
     private readonly Dictionary<string, string> _cliLocalPidToServer = new();
     private float _cliGateDeadline;
@@ -343,7 +341,7 @@ public class SceneNet : MonoBehaviour
     }
 
     // ===== 客户端：收到“投票开始”（带参与者 pid 列表）=====
-    public void Client_OnSceneVoteStart(NetPacketReader r)
+    public void Client_OnSceneVoteStart(NetDataReader r)
     {
         // ——读包：严格按顺序——
         if (!EnsureAvailable(r, 2))
@@ -493,7 +491,7 @@ public class SceneNet : MonoBehaviour
 
 
     // ===== 客户端：收到“某人准备状态变更”（pid + ready）=====
-    private void Client_OnSomeoneReadyChanged(NetPacketReader r)
+    private void Client_OnSomeoneReadyChanged(NetDataReader r)
     {
         var pid = r.GetString();
         var rd = r.GetBool();
@@ -501,7 +499,7 @@ public class SceneNet : MonoBehaviour
         if (sceneReady.ContainsKey(localPid)) sceneReady[localPid] = rd;
     }
 
-    public void Client_OnBeginSceneLoad(NetPacketReader r)
+    public void Client_OnBeginSceneLoad(NetDataReader r)
     {
         if (!EnsureAvailable(r, 2))
         {
@@ -613,7 +611,7 @@ public class SceneNet : MonoBehaviour
         {
             // 使用新的 JSON 投票系统取消投票
             SceneVoteMessage.Host_CancelVote();
-            
+
             // ❌ 旧的二进制消息系统已废弃，保留以兼容旧客户端
             var w = new NetDataWriter();
             w.Put((byte)Op.SCENE_CANCEL);
@@ -993,7 +991,7 @@ public class SceneNet : MonoBehaviour
 
         // ✅ 主机会在加载完成后立即放行，正常情况下不需要等太久
         // ✅ 150 秒超时作为保底，防止主机崩溃或网络异常导致死锁（大型地图加载可能需要更长时间）
-        _cliGateDeadline = Time.realtimeSinceStartup + 150f;
+        _cliGateDeadline = Time.realtimeSinceStartup + 1f;
 
         Debug.Log($"[GATE] 客户端等待主机放行... (超时: 150秒)");
 
@@ -1138,7 +1136,7 @@ public class SceneNet : MonoBehaviour
     }
 
     // ——安全读取（调试期防止崩溃）——
-    public static bool TryGetString(NetPacketReader r, out string s)
+    public static bool TryGetString(NetDataReader r, out string s)
     {
         try
         {
@@ -1152,7 +1150,7 @@ public class SceneNet : MonoBehaviour
         }
     }
 
-    public static bool EnsureAvailable(NetPacketReader r, int need)
+    public static bool EnsureAvailable(NetDataReader r, int need)
     {
         return r.AvailableBytes >= need;
     }

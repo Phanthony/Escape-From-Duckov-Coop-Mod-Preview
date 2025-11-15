@@ -56,9 +56,20 @@ public class WaitingSynchronizationUI : MonoBehaviour
     private const float TASK_STUCK_TIMEOUT = 30f; // 单个任务卡住超时10秒
     private Dictionary<string, float> _taskLastUpdateTime = new Dictionary<string, float>();
 
+    // ✅ 帧率检测器 - 用于大型地图加载后的性能监控
+    private Queue<float> _fpsHistory = new Queue<float>(); // 帧率历史记录（最近N秒）
+    private const int FPS_HISTORY_SIZE = 60; // 保留60帧的记录（约1-2秒）
+    private const float MIN_STABLE_FPS = 30f; // 最低稳定帧率阈值（30 FPS）
+    private const float FPS_STABLE_DURATION = 3f; // 需要稳定维持的时间（3秒）
+    private float _fpsStableStartTime = 0f; // 帧率达到稳定阈值的开始时间
+    private bool _fpsIsStable = false; // 帧率是否已稳定
+    private bool _fpsCheckEnabled = false; // 是否启用帧率检查（只在客户端大型地图时启用）
+
     // 无敌状态管理
     private Health _invincibilityTargetHealth = null;
     private bool? _originalInvincibleState = null;
+    private Coroutine _invincibilityTimerCoroutine = null;
+    private const float INVINCIBILITY_DURATION = 30f; // 无敌持续时间（秒）
 
     public class SyncTaskStatus
     {
@@ -296,20 +307,28 @@ public class WaitingSynchronizationUI : MonoBehaviour
 
     private void Update()
     {
+        // ✅ 帧率检测（在UI显示时监控）
+        if (_panel != null && _panel.activeSelf && _fpsCheckEnabled)
+        {
+            UpdateFPSMonitor();
+        }
+
         // ✅ 超时保护：强制关闭UI
         if (_panel != null && _panel.activeSelf)
         {
             float elapsedTime = Time.time - _uiShowTime;
 
-            // 1. 绝对超时保护（30秒）
+            // 1. 绝对超时保护（90秒）
             if (elapsedTime > MAX_UI_DISPLAY_TIME)
             {
-                Debug.LogWarning($"[SYNC_UI] ⚠️ 超时保护触发！UI已显示 {elapsedTime:F1} 秒，强制关闭");
+                Debug.LogWarning(
+                    $"[SYNC_UI] ⚠️ 超时保护触发！UI已显示 {elapsedTime:F1} 秒，强制关闭"
+                );
                 ForceClose("超时保护");
                 return;
             }
 
-            // 2. 任务卡住检测（某个任务10秒未更新）
+            // 2. 任务卡住检测（某个任务30秒未更新）
             CheckStuckTasks();
         }
 
@@ -364,21 +383,52 @@ public class WaitingSynchronizationUI : MonoBehaviour
                 _autoProgressPercent = percent;
                 _lastAutoProgressTime = Time.time;
                 Debug.Log($"[SYNC_UI] 启用自动进度增长，当前进度: {percent:F0}%");
+
+                // ✅ 启用无敌状态
+                EnableCharacterInvincibility();
             }
 
-            // ✅ 自动进度增长逻辑（每秒+1%）
+            // ✅ 自动进度增长逻辑（分阶段增长速率）
             if (_autoProgressEnabled)
             {
                 float timeSinceLastUpdate = Time.time - _lastAutoProgressTime;
                 if (timeSinceLastUpdate >= 1f)
                 {
-                    _autoProgressPercent += 1f;
+                    // 根据当前进度决定增长速率
+                    float increment;
+                    if (_autoProgressPercent < 80f)
+                    {
+                        increment = 1f; // 75%-80%: 每秒+1%
+                    }
+                    else if (_autoProgressPercent < 90f)
+                    {
+                        increment = 0.5f; // 80%-90%: 每秒+0.5%
+                    }
+                    else
+                    {
+                        increment = 0.1f; // 90%-100%: 每秒+0.1%
+                    }
+
+                    _autoProgressPercent += increment;
                     _lastAutoProgressTime = Time.time;
-                    Debug.Log($"[SYNC_UI] 自动进度增长: {_autoProgressPercent:F0}%");
                 }
 
                 // 使用自动进度（但不超过100%）
                 percent = Mathf.Min(_autoProgressPercent, 100f);
+
+                // ✅ 在99%之前保持无敌状态
+                if (percent < 99.8f)
+                {
+                    // 确保无敌状态持续启用
+                    if (
+                        _invincibilityTargetHealth != null
+                        && !_invincibilityTargetHealth.Invincible
+                    )
+                    {
+                        _invincibilityTargetHealth.SetInvincible(true);
+                        Debug.Log($"[SYNC_UI] 重新启用无敌状态 (进度: {percent:F0}%)");
+                    }
+                }
 
                 // ✅ 达到100%时立即关闭
                 if (percent >= 100f)
@@ -521,16 +571,81 @@ public class WaitingSynchronizationUI : MonoBehaviour
     }
 
     /// <summary>
+    /// ✅ 帧率监控更新（每帧调用）
+    /// </summary>
+    private void UpdateFPSMonitor()
+    {
+        // 计算当前帧率
+        float currentFPS = 1f / Time.unscaledDeltaTime;
+
+        // 添加到历史记录
+        _fpsHistory.Enqueue(currentFPS);
+
+        // 保持队列大小
+        if (_fpsHistory.Count > FPS_HISTORY_SIZE)
+        {
+            _fpsHistory.Dequeue();
+        }
+
+        // 计算平均帧率
+        if (_fpsHistory.Count >= FPS_HISTORY_SIZE / 2) // 至少有一半的样本
+        {
+            float avgFPS = _fpsHistory.Average();
+
+            // 检查帧率是否达到稳定阈值
+            if (avgFPS >= MIN_STABLE_FPS)
+            {
+                if (!_fpsIsStable)
+                {
+                    // 首次达到阈值，记录时间
+                    if (_fpsStableStartTime == 0f)
+                    {
+                        _fpsStableStartTime = Time.time;
+                        Debug.Log($"[SYNC_UI_FPS] 📊 帧率开始恢复：当前平均 {avgFPS:F1} FPS");
+                    }
+                    // 检查是否已经稳定维持足够长时间
+                    else if (Time.time - _fpsStableStartTime >= FPS_STABLE_DURATION)
+                    {
+                        _fpsIsStable = true;
+                        Debug.Log($"[SYNC_UI_FPS] ✅ 帧率已稳定：平均 {avgFPS:F1} FPS（已维持 {FPS_STABLE_DURATION} 秒）");
+
+                        // 帧率恢复后，检查是否可以隐藏UI
+                        CheckAndHideIfComplete();
+                    }
+                }
+            }
+            else
+            {
+                // 帧率下降，重置稳定状态
+                if (_fpsStableStartTime != 0f)
+                {
+                    Debug.Log($"[SYNC_UI_FPS] ⚠️ 帧率波动：当前平均 {avgFPS:F1} FPS，重置稳定计时器");
+                }
+                _fpsStableStartTime = 0f;
+                _fpsIsStable = false;
+            }
+
+            // 每3秒输出一次当前帧率状态（用于调试）
+            if ((int)Time.time % 3 == 0 && Time.frameCount % 60 == 0)
+            {
+                Debug.Log($"[SYNC_UI_FPS] 📊 当前平均帧率: {avgFPS:F1} FPS，稳定状态: {(_fpsIsStable ? "已稳定" : "未稳定")}");
+            }
+        }
+    }
+
+    /// <summary>
     /// ✅ 检测卡住的任务并自动完成
     /// </summary>
     private void CheckStuckTasks()
     {
-        if (_syncTasks.Count == 0) return;
+        if (_syncTasks.Count == 0)
+            return;
 
         bool anyTaskStuck = false;
         foreach (var kv in _syncTasks.ToList()) // 使用ToList避免修改集合异常
         {
-            if (kv.Value.IsCompleted) continue;
+            if (kv.Value.IsCompleted)
+                continue;
 
             // 检查任务是否长时间未更新
             if (_taskLastUpdateTime.TryGetValue(kv.Key, out float lastUpdate))
@@ -538,7 +653,9 @@ public class WaitingSynchronizationUI : MonoBehaviour
                 float timeSinceUpdate = Time.time - lastUpdate;
                 if (timeSinceUpdate > TASK_STUCK_TIMEOUT)
                 {
-                    Debug.LogWarning($"[SYNC_UI] ⚠️ 任务卡住检测：{kv.Value.Name} 已 {timeSinceUpdate:F1} 秒未更新，自动标记为完成");
+                    Debug.LogWarning(
+                        $"[SYNC_UI] ⚠️ 任务卡住检测：{kv.Value.Name} 已 {timeSinceUpdate:F1} 秒未更新，自动标记为完成"
+                    );
                     kv.Value.IsCompleted = true;
                     kv.Value.Details = "（超时自动完成）";
                     anyTaskStuck = true;
@@ -562,7 +679,20 @@ public class WaitingSynchronizationUI : MonoBehaviour
         if (allComplete)
         {
             _allTasksCompleted = true;
-            Debug.Log("[SYNC_UI] ✅ 所有任务完成，1秒后隐藏");
+
+            // ✅ 帧率检查：如果启用了帧率检测，必须等待帧率稳定后才能隐藏
+            if (_fpsCheckEnabled && !_fpsIsStable)
+            {
+                Debug.Log("[SYNC_UI] ✅ 所有任务完成，但帧率未稳定（等待帧率恢复...）");
+                // 显示等待帧率恢复的提示
+                if (_syncStatusText != null)
+                {
+                    _syncStatusText.text = "所有任务完成，等待性能优化完成...";
+                }
+                return; // 不隐藏，等待帧率稳定
+            }
+
+            Debug.Log("[SYNC_UI] ✅ 所有任务完成且帧率稳定，1秒后隐藏");
             StartCoroutine(HideAfterDelay(1f)); // 1秒后隐藏
         }
     }
@@ -571,9 +701,16 @@ public class WaitingSynchronizationUI : MonoBehaviour
     {
         yield return new WaitForSeconds(delay);
 
-        // ✅ 双重保险：延迟后再次检查UI是否还在显示
+        // ✅ 三重检查：延迟后再次检查UI是否还在显示 + 帧率是否稳定
         if (_panel != null && _panel.activeSelf)
         {
+            // 如果启用了帧率检测但帧率未稳定，不隐藏
+            if (_fpsCheckEnabled && !_fpsIsStable)
+            {
+                Debug.LogWarning("[SYNC_UI] ⚠️ 延迟隐藏被阻止：帧率未稳定");
+                yield break; // 不隐藏
+            }
+
             Hide();
         }
     }
@@ -598,7 +735,13 @@ public class WaitingSynchronizationUI : MonoBehaviour
             // 2. 解除无敌
             DisableCharacterInvincibility();
 
-            // 3. 强制隐藏所有UI元素
+            // 3. 重置帧率检测状态
+            _fpsCheckEnabled = false;
+            _fpsHistory.Clear();
+            _fpsIsStable = false;
+            _fpsStableStartTime = 0f;
+
+            // 4. 强制隐藏所有UI元素
             if (_canvasGroup != null)
             {
                 _canvasGroup.alpha = 0f;
@@ -614,7 +757,7 @@ public class WaitingSynchronizationUI : MonoBehaviour
                 _canvas.enabled = false;
             }
 
-            // 4. 重置状态
+            // 5. 重置状态
             _allTasksCompleted = true;
             _autoProgressEnabled = false;
 
@@ -1266,6 +1409,21 @@ public class WaitingSynchronizationUI : MonoBehaviour
         _taskLastUpdateTime.Clear();
         Debug.Log($"[SYNC_UI] 超时保护已启动，最大显示时间: {MAX_UI_DISPLAY_TIME} 秒");
 
+        // ✅ 启用帧率检测（只在客户端时启用）
+        _fpsCheckEnabled = NetService.Instance != null && !NetService.Instance.IsServer;
+        _fpsHistory.Clear();
+        _fpsIsStable = false;
+        _fpsStableStartTime = 0f;
+
+        if (_fpsCheckEnabled)
+        {
+            Debug.Log("[SYNC_UI_FPS] ✅ 帧率检测已启用（客户端模式）");
+        }
+        else
+        {
+            Debug.Log("[SYNC_UI_FPS] ⚠️ 帧率检测未启用（主机模式）");
+        }
+
         // ✅ 启用角色无敌
         EnableCharacterInvincibility();
 
@@ -1277,8 +1435,20 @@ public class WaitingSynchronizationUI : MonoBehaviour
     /// </summary>
     public void Hide()
     {
-        // ✅ 强制解除角色无敌
-        DisableCharacterInvincibility();
+        // ✅ 启动无敌计时器（延迟解除无敌）
+        StartInvincibilityTimer();
+
+        // ✅ 重置帧率检测状态
+        _fpsCheckEnabled = false;
+        _fpsHistory.Clear();
+        _fpsIsStable = false;
+        _fpsStableStartTime = 0f;
+
+        // ✅ 重置帧率检测状态
+        _fpsCheckEnabled = false;
+        _fpsHistory.Clear();
+        _fpsIsStable = false;
+        _fpsStableStartTime = 0f;
 
         if (_panel != null && _panel.activeSelf)
         {
@@ -1304,8 +1474,8 @@ public class WaitingSynchronizationUI : MonoBehaviour
     /// </summary>
     public void Close()
     {
-        // ✅ 强制解除角色无敌
-        DisableCharacterInvincibility();
+        // ✅ 启动无敌计时器（延迟解除无敌）
+        StartInvincibilityTimer();
 
         // 停止淡出协程（如果有）
         if (_fadeOutCoroutine != null)
@@ -1539,7 +1709,7 @@ public class WaitingSynchronizationUI : MonoBehaviour
     }
 
     /// <summary>
-    /// 解除角色无敌状态（恢复原始状态）
+    /// 解除角色无敌状态（恢复原始状态并回满HP）
     /// </summary>
     private void DisableCharacterInvincibility()
     {
@@ -1547,8 +1717,14 @@ public class WaitingSynchronizationUI : MonoBehaviour
         {
             if (_invincibilityTargetHealth != null && _originalInvincibleState != null)
             {
+                // 恢复无敌状态
                 _invincibilityTargetHealth.SetInvincible(_originalInvincibleState.Value);
                 Debug.Log($"[SYNC_UI] ✅ 已恢复角色无敌状态为: {_originalInvincibleState.Value}");
+
+                // ✅ 回满HP
+                float maxHealth = _invincibilityTargetHealth.MaxHealth;
+                _invincibilityTargetHealth.CurrentHealth = maxHealth;
+                Debug.Log($"[SYNC_UI] ✅ 已恢复角色HP为最大值: {maxHealth}");
             }
             else if (_invincibilityTargetHealth == null && _originalInvincibleState != null)
             {
@@ -1561,6 +1737,98 @@ public class WaitingSynchronizationUI : MonoBehaviour
         catch (Exception ex)
         {
             Debug.LogError($"[SYNC_UI] 解除无敌失败: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
+
+    /// <summary>
+    /// 启动无敌计时器（在Hide/Close时调用，延迟解除无敌）
+    /// </summary>
+    private void StartInvincibilityTimer()
+    {
+        // 停止之前的计时器（如果有）
+        if (_invincibilityTimerCoroutine != null)
+        {
+            StopCoroutine(_invincibilityTimerCoroutine);
+            _invincibilityTimerCoroutine = null;
+        }
+
+        // 启动新的计时器
+        _invincibilityTimerCoroutine = StartCoroutine(InvincibilityTimerCoroutine());
+    }
+
+    /// <summary>
+    /// 无敌计时器协程：每帧满血+无敌，持续指定时间后解除
+    /// </summary>
+    private IEnumerator InvincibilityTimerCoroutine()
+    {
+        float elapsed = 0f;
+
+        var character = CharacterMainControl.Main;
+        if (character == null)
+        {
+            Debug.LogWarning("[SYNC_UI] 无敌计时器：角色为空，提前结束");
+            _invincibilityTimerCoroutine = null;
+            yield break;
+        }
+
+        var health = character.Health;
+        if (health == null)
+        {
+            Debug.LogWarning("[SYNC_UI] 无敌计时器：Health组件为空，提前结束");
+            _invincibilityTimerCoroutine = null;
+            yield break;
+        }
+
+        // 确保无敌状态启用
+        if (!health.Invincible)
+        {
+            health.SetInvincible(true);
+        }
+
+        // 每帧满血+无敌，持续指定时间
+        while (elapsed < INVINCIBILITY_DURATION)
+        {
+            if (health == null)
+            {
+                Debug.LogWarning("[SYNC_UI] 无敌计时器：Health对象已失效，提前结束");
+                _invincibilityTimerCoroutine = null;
+                yield break;
+            }
+
+            try
+            {
+                // 每帧满血（不输出日志）
+                health.CurrentHealth = health.MaxHealth;
+
+                // 确保无敌状态保持启用
+                if (!health.Invincible)
+                {
+                    health.SetInvincible(true);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[SYNC_UI] 无敌计时器帧更新异常: {ex.Message}");
+            }
+
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        // 计时器结束，解除无敌
+        Debug.Log($"[SYNC_UI] 🛡️ 无敌计时器结束（持续 {INVINCIBILITY_DURATION} 秒），解除无敌状态");
+        
+        try
+        {
+            DisableCharacterInvincibility();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[SYNC_UI] 解除无敌异常: {ex.Message}\n{ex.StackTrace}");
+        }
+        finally
+        {
+            _invincibilityTimerCoroutine = null;
         }
     }
 }
