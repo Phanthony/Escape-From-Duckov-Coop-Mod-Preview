@@ -991,10 +991,13 @@ public partial class ModBehaviourF
         if (IsServer)
             return;
 
-        // ✅ 客户端收到AI装备消息，更新追踪
-       // COOPManager.AIHandle.Client_OnAiLoadoutReceived();
+        var syncUI = WaitingSynchronizationUI.Instance;
+        syncUI?.CompleteTask("ai_loadouts","Client Received first loadout");
 
-        if (LogAiLoadoutDebug)
+            // ✅ 客户端收到AI装备消息，更新追踪
+            // COOPManager.AIHandle.Client_OnAiLoadoutReceived();
+
+            if (LogAiLoadoutDebug)
             Debug.Log($"[AI-RECV] ver={ver} aiId={aiId} model='{modelName}' icon={iconType} showName={showName} faceLen={(faceJson != null ? faceJson.Length : 0)}");
 
         if (AITool.aiById.TryGetValue(aiId, out var cmc) && cmc)

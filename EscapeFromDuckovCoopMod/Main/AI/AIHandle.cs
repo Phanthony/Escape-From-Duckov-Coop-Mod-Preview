@@ -94,58 +94,41 @@ public class AIHandle
         if (!IsServer) return;
 
         aiRootSeeds.Clear();
-        // 场景种子：时间戳 XOR Unity 随机
+        // Scene seed: timestamp XOR Unity random
         sceneSeed = Environment.TickCount ^ Random.Range(int.MinValue, int.MaxValue);
 
-        var roots = Object.FindObjectsOfType<CharacterSpawnerRoot>(true);
+        Debug.Log($"[AI-SEED] HOST generated scene seed: {sceneSeed}");
 
-        // 先算出待发送的 (id,seed) 对；对每个 root 同时加入 “主ID(可能用guid)” 和 “兼容ID(强制忽略guid)”
-        var pairs = new List<(int id, int seed)>(roots.Length * 2);
-        foreach (var r in roots)
-        {
-            var idA = AITool.StableRootId(r); // 现有策略：SpawnerGuid!=0 就用 guid，否则哈希
-            var idB = AITool.StableRootId_Alt(r); // 兼容策略：强制忽略 guid
-
-            var seed = AITool.DeriveSeed(sceneSeed, idA);
-            aiRootSeeds[idA] = seed; // 主机本地记录（可用于调试）
-
-            pairs.Add((idA, seed));
-            if (idB != idA) pairs.Add((idB, seed)); // 双映射，客户端无论算到哪条 id 都能命中
-        }
-
+        // Send only the scene seed - clients will derive individual root seeds locally
         var w = writer;
         if (w == null) return;
         w.Reset();
         w.Put((byte)Op.AI_SEED_SNAPSHOT);
         w.Put(sceneSeed);
-        w.Put(pairs.Count); // 注意：这里是 “(id,seed) 对”的总数
-
-        foreach (var pr in pairs)
-        {
-            w.Put(pr.id);
-            w.Put(pr.seed);
-        }
 
         if (target == null) CoopTool.BroadcastReliable(w);
         else target.Send(w, DeliveryMethod.ReliableOrdered);
 
-        Debug.Log($"[AI-SEED] 已发送 {pairs.Count} 条 Root 映射（原 Root 数={roots.Length}）目标={(target == null ? "ALL" : target.EndPoint.ToString())}");
+        Debug.Log($"[AI-SEED] HOST sent scene seed {sceneSeed} to {(target == null ? "ALL" : target.EndPoint.ToString())}");
+
+        // Mark synchronization tasks as complete
+        var syncUI = WaitingSynchronizationUI.Instance;
+        if (syncUI != null)
+        {
+            syncUI.CompleteTask("ai_seeds", "完成");
+            syncUI.CompleteTask("ai_loadouts", "完成");
+            Debug.Log("[AI-SEED] Completed ai_seeds and ai_loadouts sync tasks");
+        }
     }
 
 
     public void HandleAiSeedSnapshot(NetDataReader r)
     {
+        var previousSeed = sceneSeed;
         sceneSeed = r.GetInt();
         aiRootSeeds.Clear();
-        var n = r.GetInt();
-        for (var i = 0; i < n; i++)
-        {
-            var id = r.GetInt();
-            var seed = r.GetInt();
-            aiRootSeeds[id] = seed;
-        }
 
-        Debug.Log($"[AI-SEED] 收到 {n} 个 Root 的种子");
+        Debug.Log($"[AI-SEED] CLIENT received scene seed: {sceneSeed} (previous: {previousSeed}, changed: {previousSeed != sceneSeed})");
     }
 
 
@@ -689,17 +672,17 @@ public class AIHandle
         }
     }
 
-    // 客户端：应用增量，不清空，直接补/改
+    // DEPRECATED: No longer used - clients derive all seeds locally
+    // Kept for backwards compatibility with old network packets
     public void HandleAiSeedPatch(NetDataReader r)
     {
+        // No-op: Clients now derive all spawn root seeds locally from sceneSeed
+        // Just consume the packet data to avoid desync
         var n = r.GetInt();
         for (var i = 0; i < n; i++)
         {
-            var id = r.GetInt();
-            var seed = r.GetInt();
-            aiRootSeeds[id] = seed;
+            r.GetInt(); // id
+            r.GetInt(); // seed
         }
-
-        Debug.Log("[AI-SEED] 应用增量 Root 种子数: " + n);
     }
 }

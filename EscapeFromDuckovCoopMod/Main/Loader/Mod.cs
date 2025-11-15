@@ -636,7 +636,7 @@ public partial class ModBehaviourF : MonoBehaviour
             AITool.ResetAiSerials();
             if (COOPManager.AIHandle != null)
             {
-               // COOPManager.AIHandle.ClearAiLoadoutTracking();
+                // COOPManager.AIHandle.ClearAiLoadoutTracking();
             }
 
             // 2. 清理战利品缓存
@@ -779,7 +779,7 @@ public partial class ModBehaviourF : MonoBehaviour
         // ✅ 客户端重置AI装备同步追踪
         if (!IsServer)
         {
-           // COOPManager.AIHandle.Client_ResetAiLoadoutTracking();
+            // COOPManager.AIHandle.Client_ResetAiLoadoutTracking();
         }
 
         // ✅ 重置场景门控状态，为下一次场景切换做准备
@@ -824,7 +824,16 @@ public partial class ModBehaviourF : MonoBehaviour
         {
             HealthM.Instance.Client_ReportSelfHealth_IfReadyOnce();
             if (syncUI != null)
+            {
                 syncUI.CompleteTask("player_health");
+
+                var sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name.ToLower();
+                if (sceneName.Contains("base_scene"))
+                {
+                    syncUI.CompleteTask("ai_loadouts", "完成");
+                    Debug.Log("[AI-LOADOUT] Client auto-completed ai_loadouts task (bunker scene, no AI)");
+                }
+            }
         }
 
         SceneNet.Instance.TrySendSceneReadyOnce();
@@ -858,12 +867,12 @@ public partial class ModBehaviourF : MonoBehaviour
                     {
                         // 【优化】直接使用后台线程+协程方案（最佳稳定性和性能平衡）
                         // 性能提升：75-85%，完全不阻塞主线程
-                       
-                        
+
+
 
                         var ui = WaitingSynchronizationUI.Instance;
                         if (ui != null)
-                            ui.UpdateTaskStatus("ai_seeds", false, "计算中...");
+                            ui.UpdateTaskStatus("ai_seeds", true, "计算中...");
                     },
                     1.0f,
                     "AI_Seeds"
@@ -884,7 +893,7 @@ public partial class ModBehaviourF : MonoBehaviour
 
                         var ui = WaitingSynchronizationUI.Instance;
                         if (ui != null)
-                            ui.UpdateTaskStatus("ai_loadouts", false, "发送中...");
+                            ui.UpdateTaskStatus("ai_loadouts", true, "发送中...");
                     },
                     1.0f,
                     "AI_Loadouts"
@@ -895,7 +904,7 @@ public partial class ModBehaviourF : MonoBehaviour
             initManager.EnqueueDelayedTask(
                 () =>
                 {
-                
+
 
                     var ui = WaitingSynchronizationUI.Instance;
                     if (ui != null)

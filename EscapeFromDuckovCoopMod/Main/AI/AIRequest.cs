@@ -35,33 +35,11 @@ public class AIRequest : MonoBehaviour
         Instance = this;
     }
 
-    // 主机：针对单个 Root 发送增量种子（包含 guid 与兼容 id 两条映射）
+    // DEPRECATED: No longer needed - clients derive seeds locally from sceneSeed
+    // Keeping for backwards compatibility but this is now a no-op
     public void Server_SendRootSeedDelta(CharacterSpawnerRoot r, NetPeer target = null)
     {
-        if (!IsServer || r == null) return;
-
-        var idA = AITool.StableRootId(r); // 现有策略：优先用 SpawnerGuid
-        var idB = AITool.StableRootId_Alt(r); // 兼容策略：忽略 guid，用 名称+位置+场景
-
-        var seed = AITool.DeriveSeed(COOPManager.AIHandle.sceneSeed, idA);
-        COOPManager.AIHandle.aiRootSeeds[idA] = seed; // 主机本地记录，便于调试
-
-        var w = writer;
-        if (w == null) return;
-        w.Reset();
-        w.Put((byte)Op.AI_SEED_PATCH);
-        var count = idA == idB ? 1 : 2;
-        w.Put(count);
-        w.Put(idA);
-        w.Put(seed);
-        if (count == 2)
-        {
-            w.Put(idB);
-            w.Put(seed);
-        }
-
-        if (target == null) CoopTool.BroadcastReliable(w);
-        else target.Send(w, DeliveryMethod.ReliableOrdered);
+        // No-op: Clients derive all spawn root seeds locally from sceneSeed
     }
 
     public void Server_TryRebroadcastIconLater(int aiId, CharacterMainControl cmc)

@@ -119,6 +119,10 @@ public static class Patch_HSB_Dead_Broadcast
 [HarmonyPatch(typeof(Health), "SetHealth")]
 internal static class Patch_AIHealth_SetHealth_Broadcast
 {
+    // Cache last broadcasted health to avoid redundant network traffic
+    private static readonly Dictionary<int, (float max, float cur)> _lastBroadcast = new();
+    private const float HEALTH_CHANGE_THRESHOLD = 0.01f;
+
     private static void Postfix(Health __instance, float healthValue)
     {
         var mod = ModBehaviourF.Instance;
@@ -139,14 +143,34 @@ internal static class Patch_AIHealth_SetHealth_Broadcast
         var tag = cmc.GetComponent<NetAiTag>();
         if (!tag) return;
 
-        if (ModBehaviourF.LogAiHpDebug) Debug.Log($"[AI-HP][SERVER] SetHealth => broadcast aiId={tag.aiId} cur={__instance.CurrentHealth}");
-        COOPManager.AIHealth.Server_BroadcastAiHealth(tag.aiId, __instance.MaxHealth, __instance.CurrentHealth);
+        var currentMax = __instance.MaxHealth;
+        var currentHealth = __instance.CurrentHealth;
+
+        // Only broadcast if health actually changed
+        if (_lastBroadcast.TryGetValue(tag.aiId, out var last))
+        {
+            var maxChanged = Mathf.Abs(last.max - currentMax) > HEALTH_CHANGE_THRESHOLD;
+            var hpChanged = Mathf.Abs(last.cur - currentHealth) > HEALTH_CHANGE_THRESHOLD;
+
+            if (!maxChanged && !hpChanged)
+                return; // No significant change, skip broadcast
+        }
+
+        // Update cache and broadcast
+        _lastBroadcast[tag.aiId] = (currentMax, currentHealth);
+
+        if (ModBehaviourF.LogAiHpDebug) Debug.Log($"[AI-HP][SERVER] SetHealth => broadcast aiId={tag.aiId} cur={currentHealth}");
+        COOPManager.AIHealth.Server_BroadcastAiHealth(tag.aiId, currentMax, currentHealth);
     }
 }
 
 [HarmonyPatch(typeof(Health), "AddHealth")]
 internal static class Patch_AIHealth_AddHealth_Broadcast
 {
+    // Cache last broadcasted health to avoid redundant network traffic
+    private static readonly Dictionary<int, (float max, float cur)> _lastBroadcast = new();
+    private const float HEALTH_CHANGE_THRESHOLD = 0.01f;
+
     private static void Postfix(Health __instance, float healthValue)
     {
         var mod = ModBehaviourF.Instance;
@@ -167,8 +191,24 @@ internal static class Patch_AIHealth_AddHealth_Broadcast
         var tag = cmc.GetComponent<NetAiTag>();
         if (!tag) return;
 
-        if (ModBehaviourF.LogAiHpDebug) Debug.Log($"[AI-HP][SERVER] AddHealth => broadcast aiId={tag.aiId} cur={__instance.CurrentHealth}");
-        COOPManager.AIHealth.Server_BroadcastAiHealth(tag.aiId, __instance.MaxHealth, __instance.CurrentHealth);
+        var currentMax = __instance.MaxHealth;
+        var currentHealth = __instance.CurrentHealth;
+
+        // Only broadcast if health actually changed
+        if (_lastBroadcast.TryGetValue(tag.aiId, out var last))
+        {
+            var maxChanged = Mathf.Abs(last.max - currentMax) > HEALTH_CHANGE_THRESHOLD;
+            var hpChanged = Mathf.Abs(last.cur - currentHealth) > HEALTH_CHANGE_THRESHOLD;
+
+            if (!maxChanged && !hpChanged)
+                return; // No significant change, skip broadcast
+        }
+
+        // Update cache and broadcast
+        _lastBroadcast[tag.aiId] = (currentMax, currentHealth);
+
+        if (ModBehaviourF.LogAiHpDebug) Debug.Log($"[AI-HP][SERVER] AddHealth => broadcast aiId={tag.aiId} cur={currentHealth}");
+        COOPManager.AIHealth.Server_BroadcastAiHealth(tag.aiId, currentMax, currentHealth);
     }
 }
 

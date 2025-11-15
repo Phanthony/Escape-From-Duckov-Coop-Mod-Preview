@@ -105,18 +105,22 @@ internal static class HealthCache
 [HarmonyPatch(typeof(Health), "Hurt", typeof(DamageInfo))]
 internal static class Patch_AIHealth_Hurt_HostAuthority
 {
+    // Cache last broadcasted health to avoid redundant network traffic
+    private static readonly Dictionary<int, (float max, float cur)> _lastBroadcast = new();
+    private const float HEALTH_CHANGE_THRESHOLD = 0.01f;
+
     [HarmonyPriority(Priority.High)]
     private static bool Prefix(Health __instance, ref DamageInfo damageInfo)
     {
         var mod = ModBehaviourF.Instance;
         if (mod == null || !mod.networkStarted) return true;
-        if (mod.IsServer) return true; // 主机照常
-        
-        // 【优化】使用缓存判定
+        if (mod.IsServer) return true; // Host proceeds normally
+
+        // Use caching for performance
         if (HealthCache.IsMain(__instance)) return true;
         if (HealthCache.IsProxy(__instance)) return false;
 
-        // 是否 AI
+        // Check if victim is AI
         CharacterMainControl victim = null;
         try
         {
@@ -135,24 +139,23 @@ internal static class Patch_AIHealth_Hurt_HostAuthority
             {
             }
 
-        // 【优化】使用 ComponentCache 避免重复 GetComponent
+        // Use ComponentCache to avoid repeated GetComponent
         var victimIsAI = ComponentCache.IsAI(victim);
         if (!victimIsAI) return true;
 
         var attacker = damageInfo.fromCharacter;
         if (attacker == CharacterMainControl.Main)
-            return true; // 本机玩家命中 AI：允许本地结算
+            return true; // Local player hit AI: allow local processing
 
-        // —— 不处理 AI→AI ——
-        // 【优化】使用 ComponentCache 避免重复 GetComponent
+        // Don't process AI→AI
         var attackerIsAI = ComponentCache.IsAI(attacker);
         if (attackerIsAI)
-            return false; // 直接阻断，AI↔AI 不做任何本地效果
+            return false; // Block AI-on-AI damage on clients
 
         return false;
     }
 
-    // 主机在结算后广播 AI 当前血量（你已有的广播逻辑，保留）
+    // Host broadcasts AI health after damage processing
     private static void Postfix(Health __instance, DamageInfo damageInfo)
     {
         var mod = ModBehaviourF.Instance;
@@ -170,13 +173,28 @@ internal static class Patch_AIHealth_Hurt_HostAuthority
 
         if (!cmc) return;
 
-        // 【优化】使用 ComponentCache 避免重复 GetComponent
         var tag = ComponentCache.GetNetAiTag(cmc);
         if (!tag) return;
 
+        var currentMax = __instance.MaxHealth;
+        var currentHealth = __instance.CurrentHealth;
+
+        // Only broadcast if health actually changed
+        if (_lastBroadcast.TryGetValue(tag.aiId, out var last))
+        {
+            var maxChanged = Mathf.Abs(last.max - currentMax) > HEALTH_CHANGE_THRESHOLD;
+            var hpChanged = Mathf.Abs(last.cur - currentHealth) > HEALTH_CHANGE_THRESHOLD;
+
+            if (!maxChanged && !hpChanged)
+                return; // No significant change, skip broadcast
+        }
+
+        // Update cache and broadcast
+        _lastBroadcast[tag.aiId] = (currentMax, currentHealth);
+
         if (ModBehaviourF.LogAiHpDebug)
-            Debug.Log($"[AI-HP][SERVER] Hurt => broadcast aiId={tag.aiId} cur={__instance.CurrentHealth}");
-        COOPManager.AIHealth.Server_BroadcastAiHealth(tag.aiId, __instance.MaxHealth, __instance.CurrentHealth);
+            Debug.Log($"[AI-HP][SERVER] Hurt => broadcast aiId={tag.aiId} cur={currentHealth}");
+        COOPManager.AIHealth.Server_BroadcastAiHealth(tag.aiId, currentMax, currentHealth);
     }
 }
 

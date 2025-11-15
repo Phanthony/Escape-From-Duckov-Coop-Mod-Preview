@@ -1,4 +1,4 @@
-// Escape-From-Duckov-Coop-Mod-Preview
+﻿// Escape-From-Duckov-Coop-Mod-Preview
 // Copyright (C) 2025  Mr.sans and InitLoader's team
 //
 // This program is not a free software.
@@ -38,16 +38,20 @@ internal static class Patch_Root_StartSpawn
             var mod = ModBehaviourF.Instance;
             var rootId = AITool.StableRootId(__instance);
 
-            // 核心科技:) 种子未到 → 阻止原版生成，并排队等待；到种子后再反射调用 StartSpawn()
-            if (!mod.IsServer && !COOPManager.AIHandle.aiRootSeeds.ContainsKey(rootId))
+            // Wait for scene seed to arrive from host
+            if (!mod.IsServer && COOPManager.AIHandle.sceneSeed == 0)
             {
                 if (_waiting.Add(rootId))
+                {
+                    Debug.Log($"[AI-SEED] Spawner rootId={rootId} waiting for sceneSeed (current: {COOPManager.AIHandle.sceneSeed})");
                     __instance.StartCoroutine(WaitSeedAndSpawn(__instance, rootId));
+                }
                 return false;
             }
 
-            // 进入“随机数种子作用域”
-            var useSeed = mod.IsServer ? AITool.DeriveSeed(COOPManager.AIHandle.sceneSeed, rootId) : COOPManager.AIHandle.aiRootSeeds[rootId];
+            // Derive seed locally from scene seed and root ID
+            var useSeed = AITool.DeriveSeed(COOPManager.AIHandle.sceneSeed, rootId);
+            Debug.Log($"[AI-SEED] Spawner rootId={rootId} using derived seed={useSeed} from sceneSeed={COOPManager.AIHandle.sceneSeed}");
             _rngStack.Push(Random.state);
             Random.InitState(useSeed);
             return true;
@@ -70,17 +74,17 @@ internal static class Patch_Root_StartSpawn
     private static IEnumerator WaitSeedAndSpawn(CharacterSpawnerRoot inst, int rootId)
     {
         var mod = ModBehaviourF.Instance;
-        while (mod && !COOPManager.AIHandle.aiRootSeeds.ContainsKey(rootId)) yield return null;
+        while (mod && COOPManager.AIHandle.sceneSeed == 0) yield return null;
 
         _waiting.Remove(rootId);
 
         if (inst)
         {
-            // 先把刷怪根及父链强制激活，防止在非激活层级里生成失败
+            // Force activate hierarchy to prevent spawning in inactive hierarchy
             ForceActivateHierarchy(inst.transform);
 
             if (_miStartSpawn != null)
-                _miStartSpawn.Invoke(inst, null); // 反射调用 private StartSpawn()
+                _miStartSpawn.Invoke(inst, null); // Reflect call to private StartSpawn()
         }
     }
 
@@ -177,16 +181,14 @@ internal static class Patch_Root_Init_FixContain
             if (msc != null)
             {
                 MultiSceneCore.MoveToMainScene(__instance.gameObject);
-                // 仅在 Guid 非 0 时登记，避免把“0”当成全场唯一
+                // Only register when GUID is non-zero to avoid treating "0" as globally unique
                 if (__instance.SpawnerGuid != 0)
                     msc.usedCreatorIds.Add(__instance.SpawnerGuid);
             }
 
-            var mod = ModBehaviourF.Instance;
-            if (mod != null && mod.IsServer) AIRequest.Instance.Server_SendRootSeedDelta(__instance);
+            // No need to send individual root seeds - clients derive them locally from sceneSeed
 
-
-            return false; // 跳过原始 Init（避免误删）
+            return false; // Skip original Init to avoid incorrect deletion
         }
         catch (Exception e)
         {
@@ -217,15 +219,9 @@ internal static class Patch_Root_Update_ClientAutoSpawn
 
         var rootId = AITool.StableRootId(__instance);
 
-        // 没种子 → 兼容一次 AltId 映射（你已有）
-        if (!COOPManager.AIHandle.aiRootSeeds.ContainsKey(rootId))
-        {
-            var altId = AITool.StableRootId_Alt(__instance);
-            if (COOPManager.AIHandle.aiRootSeeds.TryGetValue(altId, out var seed))
-                COOPManager.AIHandle.aiRootSeeds[rootId] = seed;
-            else
-                return; // 种子确实没到，别刷
-        }
+        // Wait for scene seed to arrive
+        if (COOPManager.AIHandle.sceneSeed == 0)
+            return;
 
         // 关键：尊重原版判断（时间/天气/触发器）
         var ok = false;

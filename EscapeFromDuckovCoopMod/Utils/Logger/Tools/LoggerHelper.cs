@@ -5,11 +5,11 @@ using EscapeFromDuckovCoopMod.Utils.Logger.Logs;
 namespace EscapeFromDuckovCoopMod.Utils.Logger.Tools
 {
     /// <summary>
-    /// 一个专门为本项目设计的 Logger 单例辅助类
+    /// A Logger singleton helper class specifically designed for this project
     /// </summary>
     public class LoggerHelper
     {
-        // 可以在此次修改初始化逻辑，以添加更多的日志处理器或修改过滤器
+        // Can modify initialization logic here to add more log handlers or modify filters
         private static readonly Lazy<LogHandlers.Logger> _instance = new Lazy<LogHandlers.Logger>(
             () =>
             {
@@ -22,13 +22,18 @@ namespace EscapeFromDuckovCoopMod.Utils.Logger.Tools
                 );
                 logger.AddHandler(asyncConsoleHandler);
 
-                // 打印标签日志示例：
-                //logger.Log(new LabelLog(LogLevel.Info, "标签日志", "Label"));
-                // 或者通过扩展方法
-                //logger.Log(LogLevel.Info, "标签日志", "Label");
-                //logger.LogInfo("标签日志", "Label");
+                // Initialize standalone file log handler
+                var fileLogHandler = new FileLogHandler();
+                var asyncFileHandler = LogHandlerAsyncDecorator.CreateDecorator(fileLogHandler);
+                logger.AddHandler(asyncFileHandler);
 
-                // 过滤器示例：不允许输出 None 和 Info 级别的日志
+                // Example of printing label logs:
+                //logger.Log(new LabelLog(LogLevel.Info, "Label log", "Label"));
+                // Or through extension methods
+                //logger.Log(LogLevel.Info, "Label log", "Label");
+                //logger.LogInfo("Label log", "Label");
+
+                // Filter example: do not output None and Info level logs
                 //logger.Filter.AddFilter<Log>((log) =>
                 //{
                 //    return log.Level is not (LogLevel.None or LogLevel.Info);
@@ -41,7 +46,7 @@ namespace EscapeFromDuckovCoopMod.Utils.Logger.Tools
 
         public static LogHandlers.Logger Instance => _instance.Value;
 
-        // 替代掉 Debug.Log 之类的玩意
+        // Replace Debug.Log and similar methods
         public static void Log(string message)
         {
             Instance.Log(new Log(LogLevel.Info, message));

@@ -59,9 +59,8 @@ public static class AITool
     public static int StableRootId(CharacterSpawnerRoot r)
     {
         if (r == null) return 0;
-        if (r.SpawnerGuid != 0) return r.SpawnerGuid;
 
-        // 取 relatedScene（Init 会设置）；拿不到就退化为当前场景索引
+        // Always use position-based hash to ensure host and client consistency (ignore SpawnerGuid)
         var sceneIndex = -1;
         try
         {
@@ -74,40 +73,13 @@ public static class AITool
 
         if (sceneIndex < 0) sceneIndex = SceneManager.GetActiveScene().buildIndex;
 
-        // 世界坐标量化到 0.1m，避免浮点抖动
+        // Quantize world coords to 0.1m to avoid floating point drift
         var p = r.transform.position;
         var qx = Mathf.RoundToInt(p.x * 10f);
         var qy = Mathf.RoundToInt(p.y * 10f);
         var qz = Mathf.RoundToInt(p.z * 10f);
 
-        // 名称 + 位置 + 场景索引 → FNV1a
-        var key = $"{sceneIndex}:{r.name}:{qx},{qy},{qz}";
-        return StableHash(key);
-    }
-
-    public static int StableRootId_Alt(CharacterSpawnerRoot r)
-    {
-        if (r == null) return 0;
-
-        // 不看 SpawnerGuid，强制用 场景索引 + 名称 + 量化坐标
-        var sceneIndex = -1;
-        try
-        {
-            var fi = typeof(CharacterSpawnerRoot).GetField("relatedScene", BindingFlags.NonPublic | BindingFlags.Instance);
-            if (fi != null) sceneIndex = (int)fi.GetValue(r);
-        }
-        catch
-        {
-        }
-
-        if (sceneIndex < 0)
-            sceneIndex = SceneManager.GetActiveScene().buildIndex;
-
-        var p = r.transform.position;
-        var qx = Mathf.RoundToInt(p.x * 10f);
-        var qy = Mathf.RoundToInt(p.y * 10f);
-        var qz = Mathf.RoundToInt(p.z * 10f);
-
+        // Hash: scene index + name + position
         var key = $"{sceneIndex}:{r.name}:{qx},{qy},{qz}";
         return StableHash(key);
     }
