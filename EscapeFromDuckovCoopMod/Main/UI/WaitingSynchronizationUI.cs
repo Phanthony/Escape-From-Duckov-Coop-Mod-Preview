@@ -1581,8 +1581,24 @@ public class WaitingSynchronizationUI : MonoBehaviour
     /// <summary>
     /// 标记任务完成
     /// </summary>
-    public void CompleteTask(string taskId, string details = "")
+    public void CompleteTask(string taskId, string details = "", float waitingTime = 0f)
     {
+        if (waitingTime > 0f)
+        {
+            StartCoroutine(CompleteTaskAfterDelay(taskId, details, waitingTime));
+        }
+        else
+        {
+            UpdateTaskStatus(taskId, true, details);
+        }
+    }
+
+    /// <summary>
+    /// Coroutine to complete task after delay
+    /// </summary>
+    private IEnumerator CompleteTaskAfterDelay(string taskId, string details, float waitingTime)
+    {
+        yield return new WaitForSeconds(waitingTime);
         UpdateTaskStatus(taskId, true, details);
     }
 

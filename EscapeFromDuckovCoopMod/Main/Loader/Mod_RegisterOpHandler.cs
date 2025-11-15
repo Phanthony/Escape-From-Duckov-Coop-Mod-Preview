@@ -992,7 +992,7 @@ public partial class ModBehaviourF
             return;
 
         var syncUI = WaitingSynchronizationUI.Instance;
-        syncUI?.CompleteTask("ai_loadouts","Client Received first loadout");
+        syncUI?.CompleteTask("ai_loadouts","Client Received first loadout", 5f);
 
             // ✅ 客户端收到AI装备消息，更新追踪
             // COOPManager.AIHandle.Client_OnAiLoadoutReceived();
