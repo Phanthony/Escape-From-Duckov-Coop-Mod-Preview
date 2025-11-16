@@ -12,7 +12,7 @@ namespace EscapeFromDuckovCoopMod
     {
         public readonly struct LobbyInfo
         {
-            public LobbyInfo(CSteamID lobbyId, string lobbyName, string hostName, int memberCount, int maxMembers, bool requiresPassword)
+            public LobbyInfo(CSteamID lobbyId, string lobbyName, string hostName, int memberCount, int maxMembers, bool requiresPassword, CSteamID ownerId = default)
             {
                 LobbyId = lobbyId;
                 LobbyName = lobbyName;
@@ -20,6 +20,7 @@ namespace EscapeFromDuckovCoopMod
                 MemberCount = memberCount;
                 MaxMembers = maxMembers;
                 RequiresPassword = requiresPassword;
+                OwnerId = ownerId;
             }
 
             public CSteamID LobbyId { get; }
@@ -28,6 +29,7 @@ namespace EscapeFromDuckovCoopMod
             public int MemberCount { get; }
             public int MaxMembers { get; }
             public bool RequiresPassword { get; }
+            public CSteamID OwnerId { get; }
         }
 
         public enum LobbyJoinError
@@ -51,6 +53,7 @@ namespace EscapeFromDuckovCoopMod
         private const string LobbyPasswordProtectedKey = "password_protected";
         private const string LobbyNameKey = "name";
         private const string LobbyHostKey = "host";
+        private const string LobbyHostIdKey = "host_id";
         private const string LobbyVersionKey = "version";
         private const string LobbyModIdentifier = "EscapeFromDuckovCoopMod_v1.0";
 
@@ -335,6 +338,9 @@ namespace EscapeFromDuckovCoopMod
             }
             SteamMatchmaking.SetLobbyData(_currentLobbyId, LobbyHostKey, hostName);
 
+            var myId = SteamUser.GetSteamID();
+            SteamMatchmaking.SetLobbyData(_currentLobbyId, LobbyHostIdKey, myId.m_SteamID.ToString());
+
             var passwordHash = HashPassword(options.Password);
             SteamMatchmaking.SetLobbyData(_currentLobbyId, LobbyPasswordKey, passwordHash);
             SteamMatchmaking.SetLobbyData(_currentLobbyId, LobbyPasswordProtectedKey, string.IsNullOrEmpty(passwordHash) ? "0" : "1");
@@ -348,7 +354,8 @@ namespace EscapeFromDuckovCoopMod
                     hostName,
                     SteamMatchmaking.GetNumLobbyMembers(_currentLobbyId),
                     maxPlayers,
-                    !string.IsNullOrEmpty(passwordHash)
+                    !string.IsNullOrEmpty(passwordHash),
+                    myId
                 ),
                 PasswordHash = passwordHash
             };
@@ -459,7 +466,8 @@ namespace EscapeFromDuckovCoopMod
                     meta.Info.HostName,
                     SteamMatchmaking.GetNumLobbyMembers(lobbyId),
                     SteamMatchmaking.GetLobbyMemberLimit(lobbyId),
-                    meta.Info.RequiresPassword
+                    meta.Info.RequiresPassword,
+                    meta.Info.OwnerId
                 );
                 _lobbyMetadata[lobbyId] = meta;
                 RefreshLobbyListCache();
@@ -515,6 +523,13 @@ namespace EscapeFromDuckovCoopMod
                 hostName = "Host";
             }
 
+            var hostIdStr = SteamMatchmaking.GetLobbyData(lobbyId, LobbyHostIdKey);
+            CSteamID hostId = CSteamID.Nil;
+            if (!string.IsNullOrWhiteSpace(hostIdStr) && ulong.TryParse(hostIdStr, out var hostIdVal))
+            {
+                hostId = new CSteamID(hostIdVal);
+            }
+
             var passwordHash = SteamMatchmaking.GetLobbyData(lobbyId, LobbyPasswordKey);
             var passwordProtectedFlag = SteamMatchmaking.GetLobbyData(lobbyId, LobbyPasswordProtectedKey);
             var requiresPassword = !string.IsNullOrEmpty(passwordHash) || passwordProtectedFlag == "1";
@@ -527,7 +542,7 @@ namespace EscapeFromDuckovCoopMod
 
             _lobbyMetadata[lobbyId] = new LobbyMetadata
             {
-                Info = new LobbyInfo(lobbyId, lobbyName, hostName, memberCount, maxMembers, requiresPassword),
+                Info = new LobbyInfo(lobbyId, lobbyName, hostName, memberCount, maxMembers, requiresPassword, hostId),
                 PasswordHash = passwordHash
             };
 
@@ -537,7 +552,29 @@ namespace EscapeFromDuckovCoopMod
         private void RefreshLobbyListCache()
         {
             _availableLobbies.Clear();
-            _availableLobbies.AddRange(_lobbyMetadata.Values.Select(meta => meta.Info).OrderBy(info => info.LobbyName, StringComparer.OrdinalIgnoreCase));
+
+            // Sort lobbies: friends first (alphabetically), then non-friends (alphabetically)
+            var sortedLobbies = _lobbyMetadata.Values
+                .Select(meta => meta.Info)
+                .OrderByDescending(info =>
+                {
+                    // Use the stored owner ID from lobby metadata
+                    var owner = info.OwnerId;
+                    if (owner == CSteamID.Nil)
+                        return 0;
+
+                    // Check if they're a friend
+                    var relationship = SteamFriends.GetFriendRelationship(owner);
+                    var isFriend = relationship == EFriendRelationship.k_EFriendRelationshipFriend;
+
+                    Debug.Log($"[Lobby Sort] {info.LobbyName} - Owner: {owner.m_SteamID}, Relationship: {relationship}, IsFriend: {isFriend}");
+
+                    // Friends get priority 1, non-friends get priority 0
+                    return isFriend ? 1 : 0;
+                })
+                .ThenBy(info => info.LobbyName, StringComparer.OrdinalIgnoreCase);
+
+            _availableLobbies.AddRange(sortedLobbies);
             LobbyListUpdated?.Invoke(_availableLobbies);
         }
 

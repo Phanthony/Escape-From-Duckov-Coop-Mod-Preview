@@ -920,14 +920,6 @@ public partial class ModBehaviourF : MonoBehaviour
         }
 
 #if USE_NEW_OP_NETMESSAGECONSUMER
-        // FPS logging for debugging network lag
-        if (!IsServer)
-        {
-            var fps = 1f / Time.unscaledDeltaTime;
-            var opByte = reader.PeekByte();
-            Debug.Log($"[FPS-NET] Received network message, Op={opByte}, FPS: {fps:F1}");
-        }
-
         // 使用新的消息处理系统，通过 NetMessageConsumer 分发到各个注册的处理器
         // 注意：若使用本处理方式，需要增添或修改对OP的处理逻辑，请前往与本文件同目录的 Mod_RegisterOpHandler 文件中修改 RegisterOpHandlers 方法
         NetMessageConsumer.Instance.OnNetworkReceive(peer, reader, channelNumber, deliveryMethod);
