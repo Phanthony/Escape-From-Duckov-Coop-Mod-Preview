@@ -564,7 +564,7 @@ internal static class Patch_Inventory_AddAt_BroadcastOnServer
         // ✅ 优化：延迟到帧结束时执行，减少场景加载时的性能压力
         DeferedRunner.EndOfFrame(() =>
         {
-            // ✅ 二次检查：确保 Inventory 仍然有效且可同步
+            // Double-check: ensure Inventory is still valid and can be synchronized
             if (!LootboxDetectUtil.IsLootboxInventory(__instance) || LootboxDetectUtil.IsPrivateInventory(__instance))
             {
                 return;
@@ -574,9 +574,9 @@ internal static class Patch_Inventory_AddAt_BroadcastOnServer
             COOPManager.LootNet.Server_SendLootboxState(null, __instance);
             var broadcastDuration = (Time.realtimeSinceStartup - broadcastStartTime) * 1000f;
 
-            if (broadcastDuration > 5f) // 超过5ms记录
+            if (broadcastDuration > 5f) // Exceeds 5ms - log warning
             {
-                Debug.LogWarning($"[InventoryPatch] 广播 LootboxState 耗时: {broadcastDuration:F2}ms");
+                Debug.LogWarning($"[InventoryPatch] Broadcast LootboxState took: {broadcastDuration:F2}ms");
             }
         });
     }
@@ -616,10 +616,10 @@ internal static class Patch_Inventory_AddItem_BroadcastLootState
         }
         catch
         {
-            return; // 访问失败，跳过
+            return; // Access failed, skip
         }
 
-        // ✅ 优化：延迟到帧结束时执行，减少场景加载时的性能压力
+        // Defer to end of frame to reduce performance impact during scene loading
         DeferedRunner.EndOfFrame(() =>
         {
             if (!LootboxDetectUtil.IsLootboxInventory(__instance) || LootboxDetectUtil.IsPrivateInventory(__instance)) return;
@@ -660,14 +660,14 @@ internal static class Patch_Inventory_RemoveAt_BroadcastOnServer
             return; // 访问 LootBoxInventories 失败，说明场景正在切换
         }
 
-        if (!LootboxDetectUtil.IsLootboxInventory(__instance)) return; // 只处理战利品容器
-        if (LootboxDetectUtil.IsPrivateInventory(__instance)) return; // 跳过玩家仓库/宠物包等私有库存
+        if (!LootboxDetectUtil.IsLootboxInventory(__instance)) return; // Only handle loot containers
+        if (LootboxDetectUtil.IsPrivateInventory(__instance)) return; // Skip player warehouses/pet bags and other private inventories
 
-        // ✅ 优化：延迟到帧结束时执行，减少场景加载时的性能压力
+        // Defer to end of frame to reduce performance impact during scene loading
         DeferedRunner.EndOfFrame(() =>
         {
             if (!LootboxDetectUtil.IsLootboxInventory(__instance) || LootboxDetectUtil.IsPrivateInventory(__instance)) return;
-            COOPManager.LootNet.Server_SendLootboxState(null, __instance); // 广播给所有客户端
+            COOPManager.LootNet.Server_SendLootboxState(null, __instance); // Broadcast to all clients
         });
     }
 }

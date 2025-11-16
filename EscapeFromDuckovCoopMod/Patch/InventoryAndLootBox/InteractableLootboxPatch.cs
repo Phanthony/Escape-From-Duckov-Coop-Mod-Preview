@@ -271,9 +271,11 @@ internal static class Patch_Lootbox_CreateFromItem_DeferredSpawn
     {
         var mod = ModBehaviourF.Instance;
         var dead = DeadLootSpawnContext.InOnDead;
+        Debug.Log($"[LOOT-PATCH] CreateFromItem Postfix: mod={mod != null}, networkStarted={mod?.networkStarted}, IsServer={mod?.IsServer}, dead={dead != null}, result={__result != null}");
         if (mod == null || !mod.networkStarted || !mod.IsServer) return;
         if (dead == null || !__result) return;
 
+        Debug.Log($"[LOOT-PATCH] Starting DeferredSpawn coroutine for dead loot");
         mod.StartCoroutine(DeferredSpawn(__result, dead));
     }
 

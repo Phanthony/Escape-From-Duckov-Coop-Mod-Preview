@@ -152,7 +152,7 @@ public partial class ModBehaviourF : MonoBehaviour
     public string status => Service?.status;
     public int port => Service?.port ?? 0;
     public float broadcastInterval => Service?.broadcastInterval ?? 5f;
-    public float syncInterval => Service?.syncInterval ?? 0.015f; // =========== Mod开发者注意现在是TI版本也就是满血版无同步延迟，0.03 ~33ms ===================
+    public float syncInterval => Service?.syncInterval ?? 0.033f; // 30Hz player sync (balanced for performance)
 
     public Dictionary<NetPeer, GameObject> remoteCharacters => Service?.remoteCharacters;
     public Dictionary<NetPeer, PlayerStatus> playerStatuses => Service?.playerStatuses;
@@ -357,42 +357,44 @@ public partial class ModBehaviourF : MonoBehaviour
                 COOPManager.Weather.Client_RequestEnvSync(); // 向主机要时间/天气快照
             }
 
-            if (IsServer)
-            {
-                _aiNameIconTimer += Time.deltaTime;
-                if (_aiNameIconTimer >= AI_NAMEICON_INTERVAL)
-                {
-                    _aiNameIconTimer = 0f;
-
-                    foreach (var kv in AITool.aiById)
-                    {
-                        var id = kv.Key;
-                        var cmc = kv.Value;
-                        if (!cmc)
-                            continue;
-
-                        var pr = cmc.characterPreset;
-                        if (!pr)
-                            continue;
-
-                        var iconType = 0;
-                        var showName = false;
-                        try
-                        {
-                            iconType = (int)FR_IconType(pr);
-                            showName = pr.showName;
-                            // 运行期可能刚补上了图标，兜底再查一次
-                            if (iconType == 0 && pr.GetCharacterIcon() != null)
-                                iconType = (int)FR_IconType(pr);
-                        }
-                        catch { }
-
-                        // 只给“有图标 or 需要显示名字”的 AI 发
-                        if (iconType != 0 || showName)
-                            AIName.Server_BroadcastAiNameIcon(id, cmc);
-                    }
-                }
-            }
+            // DISABLED: Icon/Name sync no longer needed - deterministic generation handles this
+            // Equipment and presets are generated identically on all clients via scene seed
+            //if (IsServer)
+            //{
+            //    _aiNameIconTimer += Time.deltaTime;
+            //    if (_aiNameIconTimer >= AI_NAMEICON_INTERVAL)
+            //    {
+            //        _aiNameIconTimer = 0f;
+            //
+            //        foreach (var kv in AITool.aiById)
+            //        {
+            //            var id = kv.Key;
+            //            var cmc = kv.Value;
+            //            if (!cmc)
+            //                continue;
+            //
+            //            var pr = cmc.characterPreset;
+            //            if (!pr)
+            //                continue;
+            //
+            //            var iconType = 0;
+            //            var showName = false;
+            //            try
+            //            {
+            //                iconType = (int)FR_IconType(pr);
+            //                showName = pr.showName;
+            //                // 运行期可能刚补上了图标，兜底再查一次
+            //                if (iconType == 0 && pr.GetCharacterIcon() != null)
+            //                    iconType = (int)FR_IconType(pr);
+            //            }
+            //            catch { }
+            //
+            //            // 只给"有图标 or 需要显示名字"的 AI 发
+            //            if (iconType != 0 || showName)
+            //                AIName.Server_BroadcastAiNameIcon(id, cmc);
+            //        }
+            //    }
+            //}
 
             // 主机：周期广播环境快照（不重）
             if (IsServer)
@@ -806,13 +808,11 @@ public partial class ModBehaviourF : MonoBehaviour
             {
                 syncUI.RegisterTask("weather", "环境同步");
                 syncUI.RegisterTask("player_health", "玩家状态同步");
-                syncUI.RegisterTask("ai_loadouts", "AI装备接收"); // ✅ 客户端也需要追踪AI装备接收进度
             }
 
             if (IsServer)
             {
                 syncUI.RegisterTask("ai_seeds", "AI种子同步");
-                syncUI.RegisterTask("ai_loadouts", "AI装备同步");
                 syncUI.RegisterTask("destructible", "可破坏物扫描");
             }
 
@@ -827,12 +827,6 @@ public partial class ModBehaviourF : MonoBehaviour
             {
                 syncUI.CompleteTask("player_health");
 
-                var sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name.ToLower();
-                if (sceneName.Contains("base_scene"))
-                {
-                    syncUI.CompleteTask("ai_loadouts", "完成");
-                    Debug.Log("[AI-LOADOUT] Client auto-completed ai_loadouts task (bunker scene, no AI)");
-                }
             }
         }
 
@@ -879,26 +873,6 @@ public partial class ModBehaviourF : MonoBehaviour
                 );
             }
 
-            // P2：AI装备同步（延迟3.5秒，批量发送避免卡顿）
-            if (IsServer)
-            {
-                initManager.EnqueueDelayedTask(
-                    () =>
-                    {
-                        // 【优化】分批发送AI装备，每批2个，避免网络拥堵和卡顿
-                        // 进一步降低批量大小，防止在 Spawning bodies 阶段造成卡顿
-                        //StartCoroutine(
-                        //    COOPManager.AIHandle.Server_BroadcastAiLoadout(batchSize: 2)
-                        //);
-
-                        var ui = WaitingSynchronizationUI.Instance;
-                        if (ui != null)
-                            ui.UpdateTaskStatus("ai_loadouts", true, "发送中...");
-                    },
-                    1.0f,
-                    "AI_Loadouts"
-                );
-            }
 
             // P2：AI名称重置（延迟3秒）
             initManager.EnqueueDelayedTask(
@@ -946,6 +920,14 @@ public partial class ModBehaviourF : MonoBehaviour
         }
 
 #if USE_NEW_OP_NETMESSAGECONSUMER
+        // FPS logging for debugging network lag
+        if (!IsServer)
+        {
+            var fps = 1f / Time.unscaledDeltaTime;
+            var opByte = reader.PeekByte();
+            Debug.Log($"[FPS-NET] Received network message, Op={opByte}, FPS: {fps:F1}");
+        }
+
         // 使用新的消息处理系统，通过 NetMessageConsumer 分发到各个注册的处理器
         // 注意：若使用本处理方式，需要增添或修改对OP的处理逻辑，请前往与本文件同目录的 Mod_RegisterOpHandler 文件中修改 RegisterOpHandlers 方法
         NetMessageConsumer.Instance.OnNetworkReceive(peer, reader, channelNumber, deliveryMethod);

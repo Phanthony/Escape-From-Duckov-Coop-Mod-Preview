@@ -31,7 +31,19 @@ internal static class Patch_CMC_OnChangeHold_AIRebroadcast
         var tag = __instance.GetComponent<NetAiTag>();
         if (tag == null || tag.aiId == 0) return;
 
-        // AI 切换/拿起/放下手持后，立即广播一份“装备+武器”快照
+        // Only broadcast if this is a death-related equipment change (loot drop)
+        // Skip initial equipment setup during spawn (deterministic generation handles that)
+        var isDeathContext = DeadLootSpawnContext.InOnDead == __instance;
+
+        if (!isDeathContext)
+        {
+            // Initial equipment or non-death weapon changes - skip broadcast
+            return;
+        }
+
+        // Death-related equipment change - broadcast it (for loot boxes)
+        if (ModBehaviourF.LogAiLoadoutDebug)
+            Debug.Log($"[AI-EQUIPMENT] aiId={tag.aiId} death-related equipment change, broadcasting for loot");
         COOPManager.AIHandle.Server_BroadcastAiLoadout(tag.aiId, __instance);
     }
 }
@@ -93,16 +105,38 @@ internal static class Patch_CMC_OnDead_Mark
         if (mod == null || !mod.networkStarted) return;
         if (!__instance) return;
 
-        // 只给 AI 打标记（排除本机玩家）
+        // Skip local player
         if (__instance == CharacterMainControl.Main) return;
-        // 【优化】使用 ComponentCache 避免重复 GetComponent
-        if (!ComponentCache.IsAI(__instance)) return;
 
+        // Check if this is an AI by looking for NetAiTag or checking aiById dictionary
+        var isAI = false;
+        var tag = __instance.GetComponent<NetAiTag>();
+        if (tag != null && tag.aiId != 0)
+        {
+            isAI = true;
+        }
+        else
+        {
+            // Fallback: check if it's in the aiById dictionary
+            foreach (var kv in AITool.aiById)
+            {
+                if (kv.Value == __instance)
+                {
+                    isAI = true;
+                    break;
+                }
+            }
+        }
+
+        if (!isAI) return;
+
+        Debug.Log($"[DEAD-CONTEXT] Setting InOnDead for AI: {__instance.characterPreset?.Name}");
         DeadLootSpawnContext.InOnDead = __instance;
     }
 
-    private static void Finalizer()
+    private static void Postfix()
     {
+        Debug.Log($"[DEAD-CONTEXT] Clearing InOnDead in Postfix");
         DeadLootSpawnContext.InOnDead = null;
     }
 }

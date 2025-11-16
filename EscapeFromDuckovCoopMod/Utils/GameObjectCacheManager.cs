@@ -60,12 +60,11 @@ public class GameObjectCacheManager : MonoBehaviour
             // 只在缓存过期时才刷新（10秒过期时间）
             // Destructibles.RefreshCache(); // 注释掉以避免重复
 
-            Environment.RefreshOnSceneLoad();
-
-            // ✅ 优化：Loot 缓存使用协程异步刷新，避免主线程阻塞
+            // ✅ 优化：Environment 和 Loot 缓存使用协程异步刷新，避免主线程阻塞
+            StartCoroutine(Environment.RefreshOnSceneLoadCoroutine());
             StartCoroutine(Loot.RefreshCacheCoroutine());
 
-            Debug.Log("[CacheManager] 所有缓存已刷新（Destructibles 跳过，Loot 异步刷新）");
+            Debug.Log("[CacheManager] 所有缓存已刷新（Destructibles 跳过，Environment 和 Loot 异步刷新）");
         }
         catch (Exception ex)
         {
@@ -499,6 +498,26 @@ public class EnvironmentObjectCache
         _cachedSceneLoaders = Object.FindObjectsOfType<SceneLoaderProxy>(true).ToList();
         _lastRefreshTime = Time.time;
         Debug.Log($"[EnvironmentCache] 刷新缓存：{_cachedLoaders.Count} 个 LootBoxLoader, {_cachedDoors.Count} 个 Door, {_cachedSceneLoaders.Count} 个 SceneLoaderProxy");
+    }
+
+    public IEnumerator RefreshOnSceneLoadCoroutine()
+    {
+        Debug.Log("[EnvironmentCache] 开始异步刷新缓存...");
+
+        // Frame 1: Find LootBoxLoaders
+        _cachedLoaders = Object.FindObjectsOfType<LootBoxLoader>(true).ToList();
+        yield return null;
+
+        // Frame 2: Find Doors
+        _cachedDoors = Object.FindObjectsOfType<global::Door>(true).ToList();
+        yield return null;
+
+        // Frame 3: Find SceneLoaders
+        _cachedSceneLoaders = Object.FindObjectsOfType<SceneLoaderProxy>(true).ToList();
+        yield return null;
+
+        _lastRefreshTime = Time.time;
+        Debug.Log($"[EnvironmentCache] 异步刷新缓存完成：{_cachedLoaders.Count} 个 LootBoxLoader, {_cachedDoors.Count} 个 Door, {_cachedSceneLoaders.Count} 个 SceneLoaderProxy");
     }
 
     /// <summary>

@@ -74,6 +74,10 @@ public class AIHandle
         string displayName
         )> pendingAiLoadouts = new();
 
+    // Delta-based sync: track last synced position for each AI
+    private readonly Dictionary<int, Vector3> _lastSyncedPosition = new();
+    private readonly Dictionary<int, Vector3> _lastSyncedForward = new();
+
     public bool freezeAI = true; // 先冻结用来验证一致性
     public int sceneSeed;
     private NetService Service => NetService.Instance;
@@ -116,8 +120,7 @@ public class AIHandle
         if (syncUI != null)
         {
             syncUI.CompleteTask("ai_seeds", "完成");
-            syncUI.CompleteTask("ai_loadouts", "完成");
-            Debug.Log("[AI-SEED] Completed ai_seeds and ai_loadouts sync tasks");
+            Debug.Log("[AI-SEED] Completed ai_seeds sync task");
         }
     }
 
@@ -129,6 +132,24 @@ public class AIHandle
         aiRootSeeds.Clear();
 
         Debug.Log($"[AI-SEED] CLIENT received scene seed: {sceneSeed} (previous: {previousSeed}, changed: {previousSeed != sceneSeed})");
+
+        // Reset LevelTime to 0 so spawners activate gradually based on their whenToSpawn values
+        var levelMgr = LevelManager.Instance;
+        if (levelMgr != null)
+        {
+            var tr = Traverse.Create(levelMgr);
+            var oldStartTime = tr.Field<float>("levelStartTime").Value;
+            tr.Field("levelStartTime").SetValue(Time.time);
+            Debug.Log($"[AI-SEED] CLIENT reset levelStartTime from {oldStartTime:F2} to {Time.time:F2} (LevelTime now = 0)");
+        }
+
+        // Complete the sync task on client side
+        var syncUI = WaitingSynchronizationUI.Instance;
+        if (syncUI != null)
+        {
+            syncUI.CompleteTask("ai_seeds", "完成");
+            Debug.Log("[AI-SEED] CLIENT completed ai_seeds sync task");
+        }
     }
 
 
@@ -188,8 +209,10 @@ public class AIHandle
             }
         }
 
-        if (IsServer && cmc)
-            Server_BroadcastAiLoadout(aiId, cmc);
+        // No longer broadcast initial loadout - equipment is now deterministically generated on all clients
+        // Dynamic changes (weapon pickup/drop) are still broadcast via CharacterMainControlPatch
+        // if (IsServer && cmc)
+        //     Server_BroadcastAiLoadout(aiId, cmc);
 
         if (!IsServer && cmc)
         {
@@ -575,22 +598,105 @@ public class AIHandle
     {
         if (!IsServer || AITool.aiById.Count == 0) return;
 
-        writer.Reset();
-        writer.Put((byte)Op.AI_TRANSFORM_SNAPSHOT);
-        // 统计有效数量
-        var cnt = 0;
-        foreach (var kv in AITool.aiById)
-            if (kv.Value)
-                cnt++;
-        writer.Put(cnt);
+        // Delta threshold: only sync AI that moved more than 5cm or rotated more than 5 degrees
+        const float positionThreshold = 0.05f; // 5cm
+        const float rotationThreshold = 0.996f; // ~5 degrees (cos(5°))
+
+        // Distance culling: only sync AI within this distance of any player
+        const float maxSyncDistance = 100f; // 100 meters
+        const float maxSyncDistanceSqr = maxSyncDistance * maxSyncDistance;
+
+        // Get all player positions for distance culling
+        var playerPositions = new List<Vector3>();
+
+        // Add host player
+        var mainChar = LevelManager.Instance?.MainCharacter;
+        if (mainChar != null)
+            playerPositions.Add(mainChar.transform.position);
+
+        // Add remote players
+        if (remoteCharacters != null)
+        {
+            foreach (var rc in remoteCharacters.Values)
+            {
+                if (rc != null)
+                    playerPositions.Add(rc.transform.position);
+            }
+        }
+
+        if (playerPositions.Count == 0) return; // No players to sync for
+
+        // Collect AI that need syncing (moved or within range)
+        var aiToSync = new List<(int aiId, Vector3 pos, Vector3 fwd)>();
+
         foreach (var kv in AITool.aiById)
         {
             var cmc = kv.Value;
             if (!cmc) continue;
+
+            var aiId = kv.Key;
             var t = cmc.transform;
-            writer.Put(kv.Key); // aiId
-            writer.PutV3cm(t.position); // 压缩位置
-            var fwd = cmc.characterModel.transform.rotation * Vector3.forward;
+            var currentPos = t.position;
+            var currentFwd = cmc.characterModel.transform.rotation * Vector3.forward;
+
+            // Distance culling: check if AI is near any player
+            var nearPlayer = false;
+            foreach (var playerPos in playerPositions)
+            {
+                var distSqr = (currentPos - playerPos).sqrMagnitude;
+                if (distSqr <= maxSyncDistanceSqr)
+                {
+                    nearPlayer = true;
+                    break;
+                }
+            }
+
+            if (!nearPlayer) continue; // Skip AI too far from all players
+
+            // Delta check: has AI moved or rotated significantly?
+            var needsSync = false;
+
+            if (!_lastSyncedPosition.TryGetValue(aiId, out var lastPos))
+            {
+                needsSync = true; // First time seeing this AI
+            }
+            else
+            {
+                var posDelta = Vector3.Distance(currentPos, lastPos);
+                if (posDelta > positionThreshold)
+                    needsSync = true;
+
+                if (_lastSyncedForward.TryGetValue(aiId, out var lastFwd))
+                {
+                    var rotDot = Vector3.Dot(currentFwd, lastFwd);
+                    if (rotDot < rotationThreshold)
+                        needsSync = true;
+                }
+            }
+
+            if (needsSync)
+            {
+                aiToSync.Add((aiId, currentPos, currentFwd));
+                _lastSyncedPosition[aiId] = currentPos;
+                _lastSyncedForward[aiId] = currentFwd;
+            }
+        }
+
+        // Only send if there are AI to sync
+        if (aiToSync.Count == 0) return;
+
+        // Debug: log when syncing significant amount of AI
+        if (aiToSync.Count > 20)
+            Debug.Log($"[AI-SYNC] Broadcasting {aiToSync.Count}/{AITool.aiById.Count} AI transforms");
+
+        writer.Reset();
+        writer.Put((byte)Op.AI_TRANSFORM_SNAPSHOT);
+        writer.Put(aiToSync.Count);
+
+        foreach (var (aiId, pos, fwd) in aiToSync)
+        {
+            writer.Put(aiId);
+            writer.PutV3cm(pos);
             writer.PutDir(fwd);
         }
 

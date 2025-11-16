@@ -44,9 +44,11 @@ public class AIRequest : MonoBehaviour
 
     public void Server_TryRebroadcastIconLater(int aiId, CharacterMainControl cmc)
     {
-        if (!IsServer || aiId == 0 || !cmc) return;
-        if (!AIName._iconRebroadcastScheduled.Add(aiId)) return; // 只安排一次
-
-        StartCoroutine(AIName.IconRebroadcastRoutine(aiId, cmc));
+        // DISABLED: Icon/Name rebroadcast no longer needed - deterministic generation handles this
+        // Equipment and presets are generated identically on all clients via scene seed
+        //if (!IsServer || aiId == 0 || !cmc) return;
+        //if (!AIName._iconRebroadcastScheduled.Add(aiId)) return; // 只安排一次
+        //
+        //StartCoroutine(AIName.IconRebroadcastRoutine(aiId, cmc));
     }
 }

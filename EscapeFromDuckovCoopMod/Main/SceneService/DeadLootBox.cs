@@ -18,14 +18,16 @@ using System.Collections;
 using ItemStatsSystem;
 using UnityEngine.SceneManagement;
 using EscapeFromDuckovCoopMod.Net;
-using Object = UnityEngine.Object;  // 引入智能发送扩展方法
+using Object = UnityEngine.Object;
+using Duckov.Utilities;  // 引入智能发送扩展方法
 
 namespace EscapeFromDuckovCoopMod;
 
 public class DeadLootBox : MonoBehaviour
 {
-    // ★ 修复：启用立即广播，确保客户端生成盒子时就能收到物品数据
-    public const bool EAGER_BROADCAST_LOOT_STATE_ON_SPAWN = true;
+    // Disable eager broadcast - AI loot is deterministic, client generates same contents locally
+    // Only broadcast LOOT_STATE when client explicitly requests it (opens the loot box)
+    public const bool EAGER_BROADCAST_LOOT_STATE_ON_SPAWN = false;
     public static DeadLootBox Instance;
 
     private NetService Service => NetService.Instance;
@@ -148,55 +150,77 @@ public class DeadLootBox : MonoBehaviour
 
     private GameObject GetDeadLootPrefabOnClient(int aiId)
     {
-        // 1) 首选：死亡 CMC 上的 private deadLootBoxPrefab
+        // 1) 首选：死亡 CMC 上的 private deadLootBoxPrefab (only if AI still exists)
         try
         {
             if (aiId > 0 && AITool.aiById.TryGetValue(aiId, out var cmc) && cmc)
             {
-                // 【优化】移除 Debug.LogWarning，减少日志开销
-                // Debug.LogWarning($"[SpawnDeadloot] AiID:{cmc.GetComponent<NetAiTag>().aiId}");
-                // if (cmc.deadLootBoxPrefab.gameObject == null) Debug.LogWarning("[SPawnDead] deadLootBoxPrefab.gameObject null!");
-
-                if (cmc != null)
+                var obj = cmc.deadLootBoxPrefab.gameObject;
+                if (obj)
                 {
-                    var obj = cmc.deadLootBoxPrefab.gameObject;
-                    if (obj) return obj;
+                    Debug.Log($"[DEAD_LOOT] Using AI's deadLootBoxPrefab for aiId={aiId}");
+                    return obj;
                 }
-                // 【优化】移除 Debug.LogWarning
-                // else { Debug.LogWarning("[SPawnDead] cmc is null!"); }
             }
         }
         catch
         {
         }
 
-        // 2) 兜底：沿用你现有逻辑（Main 或任意 CMC）
+        // 2) For AI loot (aiId > 0): use generic AI loot box from GameplayDataSettings
+        if (aiId > 0)
+        {
+            try
+            {
+                var prefabs = GameplayDataSettings.Prefabs;
+                if (prefabs != null && prefabs.LootBoxPrefab != null)
+                {
+                    Debug.Log($"[DEAD_LOOT] Using generic LootBoxPrefab for aiId={aiId} (AI already destroyed)");
+                    return prefabs.LootBoxPrefab.gameObject;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        // 3) For player loot (aiId == 0): use tomb prefab
         try
         {
             var main = CharacterMainControl.Main;
             if (main)
             {
                 var obj = main.deadLootBoxPrefab.gameObject;
-                if (obj) return obj;
+                if (obj)
+                {
+                    Debug.Log($"[DEAD_LOOT] Using player's deadLootBoxPrefab");
+                    return obj;
+                }
             }
         }
         catch
         {
         }
 
+        // 4) Final fallback
         try
         {
             var any = FindObjectOfType<CharacterMainControl>();
             if (any)
             {
                 var obj = any.deadLootBoxPrefab.gameObject;
-                if (obj) return obj;
+                if (obj)
+                {
+                    Debug.Log($"[DEAD_LOOT] Using fallback deadLootBoxPrefab");
+                    return obj;
+                }
             }
         }
         catch
         {
         }
 
+        Debug.LogError($"[DEAD_LOOT] Failed to find any deadLootBoxPrefab for aiId={aiId}");
         return null;
     }
 

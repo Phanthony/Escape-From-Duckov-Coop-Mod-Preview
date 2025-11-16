@@ -1,4 +1,4 @@
-// Escape-From-Duckov-Coop-Mod-Preview
+﻿// Escape-From-Duckov-Coop-Mod-Preview
 // Copyright (C) 2025  Mr.sans and InitLoader's team
 //
 // This program is not a free software.
@@ -38,17 +38,88 @@ internal static class Patch_LootBoxLoader_Setup_GuardClientInit
     }
 }
 
+// Seed RNG before loot box setup to make loot generation deterministic
+// Both host and client will generate identical loot contents from the same seed
+[HarmonyPatch(typeof(LootBoxLoader), "Setup")]
+internal static class Patch_LootBoxLoader_Setup_DeterministicSeed
+{
+    private static readonly Stack<UnityEngine.Random.State> _rngStack = new Stack<UnityEngine.Random.State>();
+
+    private static bool Prefix(LootBoxLoader __instance)
+    {
+        var m = ModBehaviourF.Instance;
+        if (m == null || !m.networkStarted) return true;
+
+        // Client must wait for scene seed to arrive before generating loot
+        if (!m.IsServer && COOPManager.AIHandle.sceneSeed == 0)
+        {
+            __instance.StartCoroutine(WaitForSeedThenSetup(__instance));
+            return false; // Block original Setup, will call it after seed arrives
+        }
+
+        // Save current RNG state
+        _rngStack.Push(UnityEngine.Random.state);
+
+        // Derive deterministic seed from scene seed and loot box position
+        var sceneSeed = COOPManager.AIHandle.sceneSeed;
+        var pos = __instance.transform.position;
+        var posHash = (pos.x.GetHashCode() ^ pos.y.GetHashCode() ^ pos.z.GetHashCode());
+        var lootSeed = sceneSeed ^ posHash;
+
+        UnityEngine.Random.InitState(lootSeed);
+        Debug.Log($"[LOOT-SEED] Seeding loot box at {pos} with seed={lootSeed} (sceneSeed={sceneSeed})");
+
+        return true; // Allow original Setup to run
+    }
+
+    private static void Postfix()
+    {
+        var m = ModBehaviourF.Instance;
+        if (m == null || !m.networkStarted) return;
+
+        // Restore RNG state
+        if (_rngStack.Count > 0)
+        {
+            UnityEngine.Random.state = _rngStack.Pop();
+        }
+    }
+
+    private static System.Collections.IEnumerator WaitForSeedThenSetup(LootBoxLoader instance)
+    {
+        var m = ModBehaviourF.Instance;
+
+        // Wait for scene seed to arrive
+        while (m && COOPManager.AIHandle.sceneSeed == 0)
+        {
+            yield return null;
+        }
+
+        Debug.Log($"[LOOT-SEED] Scene seed received, now setting up loot box at {instance.transform.position}");
+
+        // Call Setup after seed has arrived
+        var setupMethod = AccessTools.Method(typeof(LootBoxLoader), "Setup");
+        if (setupMethod != null)
+        {
+            setupMethod.Invoke(instance, null);
+        }
+    }
+}
+
 [HarmonyPatch(typeof(LootBoxLoader), "Setup")]
 internal static class Patch_LootBoxLoader_Setup_BroadcastOnServer
 {
     private static async void Postfix(LootBoxLoader __instance)
     {
-        var m = ModBehaviourF.Instance;
-        if (m == null || !m.networkStarted || !m.IsServer) return;
-        await UniTask.Yield(); // 等一帧，确保物品都进箱子
-        var box = __instance ? __instance.GetComponent<InteractableLootbox>() : null;
-        var inv = box ? box.Inventory : null;
-        if (inv != null) COOPManager.LootNet.Server_SendLootboxState(null, inv);
+        // Don't broadcast LOOT_STATE during setup - loot is now deterministically generated
+        // Only send LOOT_STATE when client explicitly requests it (opens loot box)
+        return;
+
+        //var m = ModBehaviourF.Instance;
+        //if (m == null || !m.networkStarted || !m.IsServer) return;
+        //await UniTask.Yield(); // 等一帧，确保物品都进箱子
+        //var box = __instance ? __instance.GetComponent<InteractableLootbox>() : null;
+        //var inv = box ? box.Inventory : null;
+        //if (inv != null) COOPManager.LootNet.Server_SendLootboxState(null, inv);
     }
 }
 

@@ -947,6 +947,9 @@ public partial class ModBehaviourF
 
     private void HandleAiLoadoutSnapshot(NetPeer peer, NetDataReader reader, byte channelNumber, DeliveryMethod deliveryMethod)
     {
+        var fps = 1f / Time.unscaledDeltaTime;
+        Debug.Log($"[FPS-DEBUG] HandleAiLoadoutSnapshot START - FPS: {fps:F1}");
+
         var ver = reader.GetByte();
         var aiId = reader.GetInt();
 
@@ -991,19 +994,16 @@ public partial class ModBehaviourF
         if (IsServer)
             return;
 
-        var syncUI = WaitingSynchronizationUI.Instance;
-        syncUI?.CompleteTask("ai_loadouts","Client Received first loadout", 5f);
-
-            // ✅ 客户端收到AI装备消息，更新追踪
-            // COOPManager.AIHandle.Client_OnAiLoadoutReceived();
-
-            if (LogAiLoadoutDebug)
+        if (LogAiLoadoutDebug)
             Debug.Log($"[AI-RECV] ver={ver} aiId={aiId} model='{modelName}' icon={iconType} showName={showName} faceLen={(faceJson != null ? faceJson.Length : 0)}");
 
         if (AITool.aiById.TryGetValue(aiId, out var cmc) && cmc)
             COOPManager.AIHandle.Client_ApplyAiLoadout(aiId, equips, weapons, faceJson, modelName, iconType, showName, displayName).Forget();
         else
             COOPManager.AIHandle.pendingAiLoadouts[aiId] = (equips, weapons, faceJson, modelName, iconType, showName, displayName);
+
+        var fpsEnd = 1f / Time.unscaledDeltaTime;
+        Debug.Log($"[FPS-DEBUG] HandleAiLoadoutSnapshot END - FPS: {fpsEnd:F1}");
     }
 
     private void HandleAiTransformSnapshot(NetPeer peer, NetDataReader reader, byte channelNumber, DeliveryMethod deliveryMethod)

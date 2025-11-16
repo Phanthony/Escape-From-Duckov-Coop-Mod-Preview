@@ -52,6 +52,10 @@ internal static class Patch_Root_StartSpawn
             // Derive seed locally from scene seed and root ID
             var useSeed = AITool.DeriveSeed(COOPManager.AIHandle.sceneSeed, rootId);
             Debug.Log($"[AI-SEED] Spawner rootId={rootId} using derived seed={useSeed} from sceneSeed={COOPManager.AIHandle.sceneSeed}");
+
+            // Set spawner seed context for deterministic equipment generation
+            SpawnerSeedContext.SetSpawnerSeed(useSeed);
+
             _rngStack.Push(Random.state);
             Random.InitState(useSeed);
             return true;
@@ -78,14 +82,9 @@ internal static class Patch_Root_StartSpawn
 
         _waiting.Remove(rootId);
 
-        if (inst)
-        {
-            // Force activate hierarchy to prevent spawning in inactive hierarchy
-            ForceActivateHierarchy(inst.transform);
-
-            if (_miStartSpawn != null)
-                _miStartSpawn.Invoke(inst, null); // Reflect call to private StartSpawn()
-        }
+        // Now that we have the seed, let the normal game logic handle spawning
+        // The levelStartTime has been reset, so spawners will activate based on their whenToSpawn values
+        Debug.Log($"[AI-SPAWN] Spawner {rootId} ready, will activate via normal timing logic");
     }
 
     private static void Postfix(CharacterSpawnerRoot __instance)
@@ -133,19 +132,18 @@ internal static class Patch_Root_StartSpawn
                     var aiId = AITool.DeriveSeed(rootId, i + 1);
                     var tag = cmc.GetComponent<NetAiTag>() ?? cmc.gameObject.AddComponent<NetAiTag>();
 
-                    // 主机赋 id + 登记；客户端保持 tag.aiId=0 等待绑定（见修复 A）
-                    // 【优化】装备同步已改为延迟批量发送，不再立即广播
-                    if (mod.IsServer)
-                    {
-                        tag.aiId = aiId;
-                        COOPManager.AIHandle.RegisterAi(aiId, cmc); // 内部会将装备信息加入队列
-                        // Server_BroadcastAiLoadout(aiId, cmc); // 【移除】改为批量延迟发送
-                    }
+                    // Both host and client register AI with deterministic IDs (spawned with same seed)
+                    tag.aiId = aiId;
+                    COOPManager.AIHandle.RegisterAi(aiId, cmc);
+
+                    // Only host broadcasts loadouts (client spawns equipment deterministically)
+                    // Server_BroadcastAiLoadout(aiId, cmc); // 【移除】改为批量延迟发送
                 }
 
 
-                // 主机在本 root 刷完后即刻发一帧位置快照，收敛初始误差
-                if (mod.IsServer) COOPManager.AIHandle.Server_BroadcastAiTransforms();
+                // Skip initial transform broadcast during spawn - clients spawn deterministically
+                // Transform snapshots will be sent via the regular update loop once AI start moving
+                // if (mod.IsServer) COOPManager.AIHandle.Server_BroadcastAiTransforms();
             }
         }
         catch
